@@ -1,0 +1,14 @@
+[package]
+name = "groupex"
+authors = ["nutsalhan87"]
+version = "0.1.0"
+edition = "2021"
+description = "Syncronization primitive that allows acquire lock by index."
+readme = "README.md"
+repository = "https://github.com/nutsalhan87/groupex"
+license = "MIT"
+keywords = ["collections"]
+categories = ["data-structures"]
+
+[dependencies]
+parking_lot_core = "0.9.10"

@@ -1,3 +1,7 @@
+mod guard;
+
+pub use guard::GroupexGuard;
+
 use std::{
     hint,
     mem::size_of,
@@ -19,6 +23,20 @@ const INDEX_MASKS: [usize; GROUPEX_SIZE] = {
     }
     index_masks
 };
+
+#[inline]
+fn get_mask(index: usize) -> usize {
+    if index >= GROUPEX_SIZE {
+        panic!(
+            "Index must be in [0; {}] but it is {}",
+            GROUPEX_SIZE - 1,
+            index
+        );
+    }
+
+    INDEX_MASKS[index]
+}
+
 // set:    flags | mask
 // unset:  flags & !mask
 
@@ -36,9 +54,16 @@ impl RawGroupex {
 
     #[inline]
     pub fn lock(&self, index: usize) {
-        let mask = Self::get_mask(index);
-        let mut spin_cnt = 0;
+        let mask = get_mask(index);
+        let prev_flags = self.flags.fetch_or(mask, Ordering::Acquire);
+        if (prev_flags | mask) == prev_flags {
+            self.lock_slow(index, mask);
+        }
+    }
 
+    #[cold]
+    fn lock_slow(&self, index: usize, mask: usize) {
+        let mut spin_cnt = 0;
         while spin_cnt < SPIN_LIMIT {
             let prev_flags = self.flags.fetch_or(mask, Ordering::Acquire);
             if (prev_flags | mask) != prev_flags {
@@ -81,7 +106,7 @@ impl RawGroupex {
 
     #[inline]
     pub fn try_lock(&self, index: usize) -> bool {
-        let mask = Self::get_mask(index);
+        let mask = get_mask(index);
         let prev_flags = self.flags.fetch_or(mask, Ordering::Acquire);
 
         (prev_flags | mask) != prev_flags
@@ -89,8 +114,9 @@ impl RawGroupex {
 
     #[inline]
     pub fn unlock(&self, index: usize) {
-        let mask = Self::get_mask(index);
+        let mask = get_mask(index);
         self.flags.fetch_and(!mask, Ordering::Release);
+
         let mut unparked = false;
         unsafe {
             unpark_filter(
@@ -112,18 +138,9 @@ impl RawGroupex {
 
     #[inline]
     pub fn is_locked(&self, index: usize) -> bool {
-        let mask = Self::get_mask(index);
+        let mask = get_mask(index);
         let flags = self.flags.load(Ordering::Relaxed);
 
         (flags & mask) != 0
-    }
-
-    #[inline]
-    fn get_mask(index: usize) -> usize {
-        if index >= 64 {
-            panic!("Index must be in [0; 63] but it is {index}");
-        }
-
-        INDEX_MASKS[index]
     }
 }

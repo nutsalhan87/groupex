@@ -5,15 +5,15 @@ use std::{
 
 use crate::RawGroupex;
 
-pub struct GroupexGuard<'a, T> {
-    raw_groupex: &'a RawGroupex,
+pub struct GroupexGuard<'a, const BLOCKS: usize, T> {
+    raw_groupex: &'a RawGroupex<BLOCKS>,
     index: usize,
     data: &'a UnsafeCell<T>,
 }
 
-impl<'a, T> GroupexGuard<'a, T> {
+impl<'a, const BLOCKS: usize,T> GroupexGuard<'a, BLOCKS, T> {
     pub(crate) fn new(
-        raw_groupex: &'a RawGroupex,
+        raw_groupex: &'a RawGroupex<BLOCKS>,
         index: usize,
         data: &'a UnsafeCell<T>,
     ) -> Self {
@@ -25,7 +25,7 @@ impl<'a, T> GroupexGuard<'a, T> {
     }
 }
 
-impl<T> Deref for GroupexGuard<'_, T> {
+impl<const BLOCKS: usize, T> Deref for GroupexGuard<'_, BLOCKS, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -33,13 +33,13 @@ impl<T> Deref for GroupexGuard<'_, T> {
     }
 }
 
-impl<T> DerefMut for GroupexGuard<'_, T> {
+impl<const BLOCKS: usize, T> DerefMut for GroupexGuard<'_, BLOCKS, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut *self.data.get() }
     }
 }
 
-impl<T> Drop for GroupexGuard<'_, T> {
+impl<const BLOCKS: usize, T> Drop for GroupexGuard<'_, BLOCKS, T> {
     fn drop(&mut self) {
         self.raw_groupex.unlock(self.index);
     }

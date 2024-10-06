@@ -4,33 +4,33 @@ use std::{
     hash::{BuildHasher, Hash},
 };
 
-use crate::{groupex_guard::GroupexGuard, raw_groupex::GROUPEX_SIZE, RawGroupex};
+use crate::{groupex_guard::GroupexGuard, RawGroupex};
 
 #[derive(Default)]
-pub struct GroupexMap<K, V>
+pub struct GroupexMap<const BLOCKS: usize, K, V>
 where
     K: Eq + Hash,
 {
-    raw_groupex: RawGroupex,
+    raw_groupex: RawGroupex<BLOCKS>,
     map: HashMap<K, UnsafeCell<V>>,
 }
 
-impl<K, V> GroupexMap<K, V>
+impl<const BLOCKS: usize, K, V> GroupexMap<BLOCKS, K, V>
 where
     K: Eq + Hash,
 {
-    pub fn lock(&self, key: K) -> Option<GroupexGuard<'_, V>> {
+    pub fn lock(&self, key: K) -> Option<GroupexGuard<'_, BLOCKS, V>> {
         let data = self.map.get(&key)?;
 
         let hash = self.map.hasher().hash_one(key) as usize;
-        let index = hash % GROUPEX_SIZE;
+        let index = hash % self.raw_groupex.elements();
         self.raw_groupex.lock(index);
 
         Some(GroupexGuard::new(&self.raw_groupex, index, data))
     }
 }
 
-impl<K, V> From<HashMap<K, V>> for GroupexMap<K, V>
+impl<const BLOCKS: usize, K, V> From<HashMap<K, V>> for GroupexMap<BLOCKS, K, V>
 where
     K: Eq + Hash,
 {
@@ -47,7 +47,7 @@ where
     }
 }
 
-impl<K, V> Into<HashMap<K, V>> for GroupexMap<K, V>
+impl<const BLOCKS: usize, K, V> Into<HashMap<K, V>> for GroupexMap<BLOCKS, K, V>
 where
     K: Eq + Hash,
 {
@@ -59,4 +59,4 @@ where
     }
 }
 
-unsafe impl<K, V> Sync for GroupexMap<K, V> where K: Eq + Hash {}
+unsafe impl<const BLOCKS: usize, K, V> Sync for GroupexMap<BLOCKS, K, V> where K: Eq + Hash {}

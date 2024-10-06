@@ -1,25 +1,25 @@
 use std::cell::UnsafeCell;
 
-use crate::{raw_groupex::GROUPEX_SIZE, GroupexGuard, RawGroupex};
+use crate::{GroupexGuard, RawGroupex};
 
 #[derive(Default)]
-pub struct GroupexVec<T> {
-    raw_groupex: RawGroupex,
+pub struct GroupexVec<const BLOCKS: usize, T> {
+    raw_groupex: RawGroupex<BLOCKS>,
     vec: Vec<UnsafeCell<T>>,
 }
 
-impl<T> GroupexVec<T> {
-    pub fn lock(&self, index: usize) -> Option<GroupexGuard<'_, T>> {
+impl<const BLOCKS: usize, T> GroupexVec<BLOCKS, T> {
+    pub fn lock(&self, index: usize) -> Option<GroupexGuard<'_, BLOCKS, T>> {
         let data = self.vec.get(index)?;
 
-        let index = index % GROUPEX_SIZE;
+        let index = index % self.raw_groupex.elements();
         self.raw_groupex.lock(index);
 
         Some(GroupexGuard::new(&self.raw_groupex, index, data))
     }
 }
 
-impl<T> From<Vec<T>> for GroupexVec<T> {
+impl<const BLOCKS: usize, T> From<Vec<T>> for GroupexVec<BLOCKS, T> {
     fn from(value: Vec<T>) -> Self {
         let vec = value.into_iter().map(UnsafeCell::new).collect();
 
@@ -30,7 +30,7 @@ impl<T> From<Vec<T>> for GroupexVec<T> {
     }
 }
 
-impl<T> Into<Vec<T>> for GroupexVec<T> {
+impl<const BLOCKS: usize, T> Into<Vec<T>> for GroupexVec<BLOCKS, T> {
     fn into(self) -> Vec<T> {
         self.vec
             .into_iter()
@@ -39,4 +39,4 @@ impl<T> Into<Vec<T>> for GroupexVec<T> {
     }
 }
 
-unsafe impl<T> Sync for GroupexVec<T> {}
+unsafe impl<const BLOCKS: usize, T> Sync for GroupexVec<BLOCKS, T> {}

@@ -1,19 +1,20 @@
+use parking_lot_core::{park, unpark_filter, FilterOp, ParkResult, ParkToken, UnparkToken};
+
 use std::{
     hint,
     mem::size_of,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicU32, Ordering},
 };
 
-use parking_lot_core::{park, unpark_filter, FilterOp, ParkToken, UnparkToken};
-
 const SPIN_LIMIT: usize = 5;
-const PARK_KEY_SHIFT: usize = 52;
-pub(crate) const GROUPEX_SIZE: usize = size_of::<usize>() * 8;
-const INDEX_MASKS: [usize; GROUPEX_SIZE] = {
-    let mut index_masks = [0; GROUPEX_SIZE];
+const PARK_KEY_SHIFT: u32 = 52;
+const BLOCK_SIZE: usize = size_of::<AtomicU32>() * 8;
+const BLOCK_INIT: AtomicU32 = AtomicU32::new(0);
+const INDEX_MASKS: [u32; BLOCK_SIZE] = {
+    let mut index_masks = [0; BLOCK_SIZE];
     index_masks[0] = 1;
     let mut i = 1;
-    while i < GROUPEX_SIZE {
+    while i < BLOCK_SIZE {
         index_masks[i] = index_masks[i - 1] << 1;
         i += 1;
     }
@@ -22,26 +23,52 @@ const INDEX_MASKS: [usize; GROUPEX_SIZE] = {
 // set:    flags | mask
 // unset:  flags & !mask
 
-#[derive(Default)]
-pub struct RawGroupex {
-    flags: AtomicUsize,
+#[inline]
+fn get_mask(index: usize, blocks: usize) -> u32 {
+    if index >= BLOCK_SIZE * blocks {
+        panic!(
+            "Index must be in [0; {}] but it is {}",
+            (BLOCK_SIZE * blocks) - 1,
+            index
+        );
+    }
+
+    INDEX_MASKS[index % BLOCK_SIZE]
 }
 
-impl RawGroupex {
+pub struct RawGroupex<const BLOCKS: usize> {
+    blocks: [AtomicU32; BLOCKS],
+}
+
+impl<const BLOCKS: usize> RawGroupex<BLOCKS> {
+    #[inline]
+    pub(crate) fn elements(&self) -> usize {
+        BLOCKS * BLOCK_SIZE
+    }
+
     pub fn new() -> Self {
+        const { assert!(BLOCKS > 0, "RawGroupex must have more blocks than 0") };
         RawGroupex {
-            flags: AtomicUsize::new(0),
+            blocks: [BLOCK_INIT; BLOCKS],
         }
     }
 
     #[inline]
     pub fn lock(&self, index: usize) {
-        let mask = Self::get_mask(index);
-        let mut spin_cnt = 0;
+        let block_index = index / BLOCK_SIZE;
+        let mask = get_mask(index, BLOCKS);
+        let prev_block = self.blocks[block_index].fetch_or(mask, Ordering::Acquire);
+        if (prev_block | mask) == prev_block {
+            self.lock_slow(block_index, mask);
+        }
+    }
 
+    #[cold]
+    fn lock_slow(&self, block_index: usize, mask: u32) {
+        let mut spin_cnt = 0;
         while spin_cnt < SPIN_LIMIT {
-            let prev_flags = self.flags.fetch_or(mask, Ordering::Acquire);
-            if (prev_flags | mask) != prev_flags {
+            let prev_block = self.blocks[block_index].fetch_or(mask, Ordering::Acquire);
+            if (prev_block | mask) != prev_block {
                 return;
             }
             for _ in 0..(1 << spin_cnt) {
@@ -52,13 +79,13 @@ impl RawGroupex {
 
         // lock acquired if false
         let validate_not_locked = || {
-            let prev_flags = self.flags.fetch_or(mask, Ordering::Acquire);
-            (prev_flags | mask) == prev_flags
+            let prev_block = self.blocks[block_index].fetch_or(mask, Ordering::Acquire);
+            (prev_block | mask) == prev_block
         };
         loop {
             match unsafe {
                 park(
-                    (self as *const _ as usize).wrapping_add(index << PARK_KEY_SHIFT),
+                    (self as *const _ as usize).wrapping_add(block_index << PARK_KEY_SHIFT),
                     validate_not_locked,
                     || (),
                     |_, _| (),
@@ -66,9 +93,9 @@ impl RawGroupex {
                     None,
                 )
             } {
-                parking_lot_core::ParkResult::Unparked(_) => (),
-                parking_lot_core::ParkResult::Invalid => return, // lock acquired if invalid
-                parking_lot_core::ParkResult::TimedOut => {
+                ParkResult::Unparked(_) => (),
+                ParkResult::Invalid => return, // lock acquired if invalid
+                ParkResult::TimedOut => {
                     panic!("Unexpected ParkResult: it's TimedOut but timeout wasn't set")
                 }
             }
@@ -81,20 +108,23 @@ impl RawGroupex {
 
     #[inline]
     pub fn try_lock(&self, index: usize) -> bool {
-        let mask = Self::get_mask(index);
-        let prev_flags = self.flags.fetch_or(mask, Ordering::Acquire);
+        let block_index = index / BLOCK_SIZE;
+        let mask = get_mask(index, BLOCKS);
+        let prev_block = self.blocks[block_index].fetch_or(mask, Ordering::Acquire);
 
-        (prev_flags | mask) != prev_flags
+        (prev_block | mask) != prev_block
     }
 
     #[inline]
     pub fn unlock(&self, index: usize) {
-        let mask = Self::get_mask(index);
-        self.flags.fetch_and(!mask, Ordering::Release);
+        let block_index = index / BLOCK_SIZE;
+        let mask = get_mask(index, BLOCKS);
+        self.blocks[block_index].fetch_and(!mask, Ordering::Release);
+
         let mut unparked = false;
         unsafe {
             unpark_filter(
-                (self as *const _ as usize).wrapping_add(index << PARK_KEY_SHIFT),
+                (self as *const _ as usize).wrapping_add(block_index.wrapping_shl(PARK_KEY_SHIFT)),
                 |park_token| {
                     if park_token.0 == self as *const _ as usize {
                         unparked = true;
@@ -112,18 +142,16 @@ impl RawGroupex {
 
     #[inline]
     pub fn is_locked(&self, index: usize) -> bool {
-        let mask = Self::get_mask(index);
-        let flags = self.flags.load(Ordering::Relaxed);
+        let block_index = index / BLOCK_SIZE;
+        let mask = get_mask(index, BLOCKS);
+        let block = self.blocks[block_index].load(Ordering::Relaxed);
 
-        (flags & mask) != 0
+        (block & mask) != 0
     }
+}
 
-    #[inline]
-    fn get_mask(index: usize) -> usize {
-        if index >= 64 {
-            panic!("Index must be in [0; 63] but it is {index}");
-        }
-
-        INDEX_MASKS[index]
+impl<const BLOCKS: usize> Default for RawGroupex<BLOCKS> {
+    fn default() -> Self {
+        Self::new()
     }
 }

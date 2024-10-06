@@ -10,7 +10,7 @@ use std::{
 };
 
 const SPIN_LIMIT: usize = 5;
-const PARK_KEY_SHIFT: usize = 52;
+const PARK_KEY_SHIFT: u32 = 52;
 const BLOCK_SIZE: usize = size_of::<AtomicU32>() * 8;
 const BLOCK_INIT: AtomicU32 = AtomicU32::new(0);
 const INDEX_MASKS: [u32; BLOCK_SIZE] = {
@@ -125,7 +125,7 @@ impl<const BLOCKS: usize> RawSizedGroupexParkingLot<BLOCKS> {
         let mut unparked = false;
         unsafe {
             unpark_filter(
-                (self as *const _ as usize).wrapping_add(block_index << PARK_KEY_SHIFT),
+                (self as *const _ as usize).wrapping_add(block_index.wrapping_shl(PARK_KEY_SHIFT)),
                 |park_token| {
                     if park_token.0 == self as *const _ as usize {
                         unparked = true;

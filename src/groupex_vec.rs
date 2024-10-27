@@ -32,11 +32,10 @@ impl<const BLOCKS: usize, T> From<Vec<T>> for GroupexVec<BLOCKS, T> {
 
 impl<const BLOCKS: usize, T> Into<Vec<T>> for GroupexVec<BLOCKS, T> {
     fn into(self) -> Vec<T> {
-        self.vec
-            .into_iter()
-            .map(|v| v.into_inner())
-            .collect()
+        self.vec.into_iter().map(|v| v.into_inner()).collect()
     }
 }
 
 unsafe impl<const BLOCKS: usize, T> Sync for GroupexVec<BLOCKS, T> {}
+
+unsafe impl<const BLOCKS: usize, T> Send for GroupexVec<BLOCKS, T> {}

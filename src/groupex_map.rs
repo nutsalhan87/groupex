@@ -60,3 +60,5 @@ where
 }
 
 unsafe impl<const BLOCKS: usize, K, V> Sync for GroupexMap<BLOCKS, K, V> where K: Eq + Hash {}
+
+unsafe impl<const BLOCKS: usize, K, V> Send for GroupexMap<BLOCKS, K, V> where K: Eq + Hash {}

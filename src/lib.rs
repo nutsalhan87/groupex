@@ -19,18 +19,12 @@
 //!
 //! Take into account that using `HashMap<_, Mutex<_>>` is faster than `GroupexMap` but the second one is more space-efficient.
 
+mod groupex;
+pub mod groupex_impl;
 mod groupex_map;
-mod groupex_map2;
-mod groupex_map3;
 mod groupex_vec;
-mod raw_groupex;
-mod raw_sized_groupex;
-mod raw_groupex_parking_lot;
+mod guard;
 
+pub use groupex::Groupex;
 pub use groupex_map::GroupexMap;
-pub use groupex_map2::GroupexMap2;
-pub use groupex_map3::GroupexMap3;
 pub use groupex_vec::GroupexVec;
-pub use raw_groupex::{GroupexGuard, RawGroupex};
-pub use raw_sized_groupex::{RawSizedGroupex, SizedGroupexGuard};
-pub use raw_groupex_parking_lot::{RawSizedGroupexParkingLot, SizedGroupexParkingLotGuard};

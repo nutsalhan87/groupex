@@ -1,7 +1,3 @@
-mod guard;
-
-pub use guard::GroupexGuard;
-
 use std::{
     hint,
     mem::size_of,
@@ -10,32 +6,11 @@ use std::{
 
 use parking_lot_core::{park, unpark_filter, FilterOp, ParkToken, UnparkToken};
 
+use crate::{groupex::get_mask, Groupex};
+
 const SPIN_LIMIT: usize = 5;
 const PARK_KEY_SHIFT: usize = 52;
-pub(crate) const GROUPEX_SIZE: usize = size_of::<usize>() * 8;
-const INDEX_MASKS: [usize; GROUPEX_SIZE] = {
-    let mut index_masks = [0; GROUPEX_SIZE];
-    index_masks[0] = 1;
-    let mut i = 1;
-    while i < GROUPEX_SIZE {
-        index_masks[i] = index_masks[i - 1] << 1;
-        i += 1;
-    }
-    index_masks
-};
-
-#[inline]
-fn get_mask(index: usize) -> usize {
-    if index >= GROUPEX_SIZE {
-        panic!(
-            "Index must be in [0; {}] but it is {}",
-            GROUPEX_SIZE - 1,
-            index
-        );
-    }
-
-    INDEX_MASKS[index]
-}
+const GROUPEX_SIZE: usize = size_of::<usize>() * 8;
 
 // set:    flags | mask
 // unset:  flags & !mask
@@ -46,33 +21,16 @@ pub struct RawGroupex {
 }
 
 impl RawGroupex {
-    pub fn new() -> Self {
-        RawGroupex {
-            flags: AtomicUsize::new(0),
-        }
-    }
-
-    #[inline]
-    pub fn lock(&self, index: usize) {
-        let mask = get_mask(index);
-        let prev_flags = self.flags.fetch_or(mask, Ordering::Acquire);
-        if (prev_flags | mask) == prev_flags {
-            self.lock_slow(index, mask);
-        }
-    }
-
     #[cold]
     fn lock_slow(&self, index: usize, mask: usize) {
-        let mut spin_cnt = 0;
-        while spin_cnt < SPIN_LIMIT {
-            let prev_flags = self.flags.fetch_or(mask, Ordering::Acquire);
-            if (prev_flags | mask) != prev_flags {
+        for spin_cnt in 0..SPIN_LIMIT {
+            let prev_block = self.flags.fetch_or(mask, Ordering::Acquire);
+            if (prev_block | mask) != prev_block {
                 return;
             }
             for _ in 0..(1 << spin_cnt) {
                 hint::spin_loop();
             }
-            spin_cnt += 1;
         }
 
         // lock acquired if false
@@ -104,17 +62,39 @@ impl RawGroupex {
         }
     }
 
+}
+
+impl Groupex for RawGroupex {
+    fn new() -> Self {
+        RawGroupex {
+            flags: AtomicUsize::new(0),
+        }
+    }
+
+    fn elements(&self) -> usize {
+        GROUPEX_SIZE
+    }
+
     #[inline]
-    pub fn try_lock(&self, index: usize) -> bool {
-        let mask = get_mask(index);
+    fn lock(&self, index: usize) {
+        let mask = get_mask::<GROUPEX_SIZE>(index);
+        let prev_flags = self.flags.fetch_or(mask, Ordering::Acquire);
+        if (prev_flags | mask) == prev_flags {
+            self.lock_slow(index, mask);
+        }
+    }
+
+    #[inline]
+    fn try_lock(&self, index: usize) -> bool {
+        let mask = get_mask::<GROUPEX_SIZE>(index);
         let prev_flags = self.flags.fetch_or(mask, Ordering::Acquire);
 
         (prev_flags | mask) != prev_flags
     }
 
     #[inline]
-    pub fn unlock(&self, index: usize) {
-        let mask = get_mask(index);
+    fn unlock(&self, index: usize) {
+        let mask = get_mask::<GROUPEX_SIZE>(index);
         self.flags.fetch_and(!mask, Ordering::Release);
 
         let mut unparked = false;
@@ -137,8 +117,8 @@ impl RawGroupex {
     }
 
     #[inline]
-    pub fn is_locked(&self, index: usize) -> bool {
-        let mask = get_mask(index);
+    fn is_locked(&self, index: usize) -> bool {
+        let mask = get_mask::<GROUPEX_SIZE>(index);
         let flags = self.flags.load(Ordering::Relaxed);
 
         (flags & mask) != 0

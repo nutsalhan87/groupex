@@ -3,29 +3,29 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use super::RawGroupex;
+use super::Groupex;
 
-pub struct GroupexGuard<'a, T> {
-    raw_groupex: &'a RawGroupex,
+pub struct GroupexGuard<'a, GROUPEX: Groupex, T> {
+    groupex: &'a GROUPEX,
     index: usize,
     data: &'a UnsafeCell<T>,
 }
 
-impl<'a, T> GroupexGuard<'a, T> {
+impl<'a, GROUPEX: Groupex, T> GroupexGuard<'a, GROUPEX, T> {
     pub(crate) fn new(
-        raw_groupex: &'a RawGroupex,
+        groupex: &'a GROUPEX,
         index: usize,
         data: &'a UnsafeCell<T>,
     ) -> Self {
         GroupexGuard {
-            raw_groupex,
+            groupex,
             index,
             data,
         }
     }
 }
 
-impl<T> Deref for GroupexGuard<'_, T> {
+impl<GROUPEX: Groupex, T> Deref for GroupexGuard<'_, GROUPEX, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -33,14 +33,14 @@ impl<T> Deref for GroupexGuard<'_, T> {
     }
 }
 
-impl<T> DerefMut for GroupexGuard<'_, T> {
+impl<GROUPEX: Groupex, T> DerefMut for GroupexGuard<'_, GROUPEX, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut *self.data.get() }
     }
 }
 
-impl<T> Drop for GroupexGuard<'_, T> {
+impl<GROUPEX: Groupex, T> Drop for GroupexGuard<'_, GROUPEX, T> {
     fn drop(&mut self) {
-        self.raw_groupex.unlock(self.index);
+        self.groupex.unlock(self.index);
     }
 }
